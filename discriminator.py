@@ -16,7 +16,7 @@ class Discriminator(nn.Module):
         for features in [128, 256, 512]:
             model += [
                 spectral_norm(nn.Conv2d(features // 2, features, 4, stride=2, padding=1)),
-                nn.InstanceNorm2d(features), 
+                nn.BatchNorm2d(features), 
                 nn.LeakyReLU(0.2, inplace=True)
             ]
 

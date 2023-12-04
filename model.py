@@ -29,13 +29,14 @@ class GAN:
             self.best_val_loss = min(self.val_errors.values(), key=lambda x: x['val_loss'])['val_loss']
             self.best_ssim_loss = max(self.val_errors.values(), key=lambda x: x['ssim'])['ssim']
             self.wait = self.val_errors[max(self.val_errors.keys())]['wait']
-            print(self.wait)
+            print(f"self.wait: {self.wait}")
         else:
             self.errors = {}
             self.val_errors = {}    
             self.best_val_loss = np.inf
             self.best_ssim_loss = 0
             self.wait = 0
+            print(f"self.wait: {self.wait}")
             
         self.device = Device().device
         self.val_dataset = SatelliteToMapDataset(root_dir=val_dataset_root_dir, resize=resize)
@@ -122,7 +123,7 @@ class GAN:
 
         plt.tight_layout()
         plt.savefig(f'plots/epoch_{epoch}_batch_{batch_index}.png')
-        plt.savefig(f'last_generated_map.png')
+        plt.savefig(f'progress.png')
         plt.close()
         
     def create_window(self, window_size, channel):
@@ -308,12 +309,14 @@ class GAN:
                 self.best_val_loss = min(val_loss, self.best_val_loss)
                 self.best_ssim_loss = max(ssim_loss, self.best_ssim_loss)
                 self.wait = 0  # reset wait
+                print(f"self.wait: {self.wait}")
                 torch.save(self.G_A.state_dict(), 'models/best_G_A.pth')
                 torch.save(self.G_B.state_dict(), 'models/best_G_B.pth')
                 torch.save(self.D_A.state_dict(), 'models/best_D_A.pth')
                 torch.save(self.D_B.state_dict(), 'models/best_D_B.pth')
             else:
                 self.wait += 1
+                print(f"self.wait: {self.wait}")
                 if self.wait >= self.patience:
                     print("Early stopping triggered")
                     break

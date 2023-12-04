@@ -1,0 +1,14 @@
+# Ignore everything
+*
+
+# But not these files...
+!*.py
+!*.ipynb
+!*.pdf
+!*.sh
+
+# Additionally, include directories
+!*/
+
+# Exclude .gitignore file
+!.gitignore

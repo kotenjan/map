@@ -1,17 +1,16 @@
-from resicual_block import ResidualBlock
 import torch.nn as nn
 import torch
 
 
 class Generator(nn.Module):
-    def __init__(self, input_channels, output_channels, n_residual_blocks=5):
+    def __init__(self, input_channels, output_channels, n_residual_blocks=5, output_type='map'):
         super(Generator, self).__init__()
 
         # Initial convolution block with ReflectionPad
         model = [
             nn.ReflectionPad2d(3),
             nn.Conv2d(input_channels, 64, 7),
-            nn.GroupNorm(64, 64),
+            nn.GroupNorm(64, 64) if output_type == 'map' else nn.InstanceNorm2d(64),
             nn.ReLU(inplace=True)
         ]
 
@@ -21,7 +20,7 @@ class Generator(nn.Module):
         for _ in range(2):
             model += [
                 nn.Conv2d(in_features, out_features, 3, stride=2, padding=1),
-                nn.GroupNorm(out_features, out_features),
+                nn.GroupNorm(out_features, out_features) if output_type == 'map' else nn.InstanceNorm2d(out_features),
                 nn.ReLU(inplace=True)
             ]
             in_features = out_features
@@ -38,7 +37,7 @@ class Generator(nn.Module):
         for _ in range(2):
             model += [
                 nn.ConvTranspose2d(in_features, out_features, 3, stride=2, padding=1, output_padding=1),
-                nn.GroupNorm(out_features, out_features),
+                nn.GroupNorm(out_features, out_features) if output_type == 'map' else nn.InstanceNorm2d(out_features),
                 nn.ReLU(inplace=True)
             ]
             in_features = out_features
@@ -48,13 +47,29 @@ class Generator(nn.Module):
         model += [
             nn.ReflectionPad2d(3),
             nn.Conv2d(64, output_channels, 7),
-            nn.Tanh()
+            nn.Tanh() if output_type == 'map' else nn.Sigmoid()
         ]
 
         self.model = nn.Sequential(*model)
 
     def forward(self, x):
         return self.model(x)
+    
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features):
+        super(ResidualBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(in_features, in_features, 3),
+            nn.InstanceNorm2d(in_features),
+            nn.ReLU(inplace=True),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(in_features, in_features, 3),
+            nn.InstanceNorm2d(in_features)
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
 
 class SelfAttentionBlock(nn.Module):
     def __init__(self, in_dim):
