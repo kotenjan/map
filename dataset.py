@@ -10,13 +10,19 @@ from sklearn.cluster import KMeans
 import json
 import torch
 import random
+import cv2
 
 
 class SatelliteToMapDataset(Dataset):
-    def __init__(self, root_dir, n_colors=10, resize=None, augmentation=True, plot=False, output_type='map'):
+    def __init__(self, root_dir, n_colors=10, resize=None, augmentation=True, plot=False, output_type='map', n_samples_per_image=5000, load=True, erosion_size=3, dilation_size=3):
         self.root_dir = root_dir
+        self.n_colors = n_colors
+        self.erosion_size = erosion_size
+        self.dilation_size = dilation_size
+        self.load = load
+        self.n_samples_per_image = n_samples_per_image
         self.output_type = output_type
-        self.color_centers = self.get_color_centers(n_colors)
+        self.color_centers = self.get_color_centers()
         self.file_list = glob.glob(self.root_dir + '/*.jpg')
         self.transform = self.get_transforms(resize, augmentation)
         self.transform_mask = self.get_transforms_mask(resize, augmentation)
@@ -59,8 +65,28 @@ class SatelliteToMapDataset(Dataset):
             torch.manual_seed(seed)
 
             transformed_masks.append(self.transform_mask(mask))
-        
-        return img_A, img_B, transformed_masks
+            
+        return img_A, img_B, [self.clean_mask(mask) for mask in transformed_masks]
+    
+    def clean_mask(self, mask):
+        kernel_erode = np.ones((self.erosion_size, self.erosion_size), np.uint8)
+        kernel_dilate = np.ones((self.dilation_size, self.dilation_size), np.uint8)
+
+        # Convert torch tensor to numpy if necessary
+        if isinstance(mask, torch.Tensor):
+            mask = mask.numpy()
+            
+        if mask.ndim == 3 and mask.shape[0] == 1:  # for single-channel 3D tensor
+            mask = mask.squeeze(0)  # remove channel dimension
+            
+        mask = mask.astype(np.uint8)
+
+        if self.erosion_size > 0:
+            mask = cv2.erode(mask, kernel_erode, iterations=1)
+        if self.dilation_size > 0:
+            mask = cv2.dilate(mask, kernel_dilate, iterations=1)
+
+        return mask
     
     def get_transforms(self, resize=None, augmentation=True):
         transform_list = []
@@ -77,7 +103,7 @@ class SatelliteToMapDataset(Dataset):
                 transforms.RandomRotation(30),
                 transforms.RandomAffine(degrees=0, translate=(0.2, 0.2), scale=(0.8, 1.2), shear=10),
                 transforms.RandomPerspective(distortion_scale=0.1, p=0.4),
-                transforms.RandomErasing(p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False)
+                transforms.RandomErasing(p=0.4, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False)
             ])
 
         transform_list.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
@@ -99,7 +125,7 @@ class SatelliteToMapDataset(Dataset):
                 transforms.RandomRotation(30),
                 transforms.RandomAffine(degrees=0, translate=(0.2, 0.2), scale=(0.8, 1.2), shear=10),
                 transforms.RandomPerspective(distortion_scale=0.1, p=0.4),
-                transforms.RandomErasing(p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False)
+                transforms.RandomErasing(p=0.4, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False)
             ])
 
         return transforms.Compose(transform_list)
@@ -113,7 +139,7 @@ class SatelliteToMapDataset(Dataset):
 
         # Determine the number of rows required for subplots based on the number of masks
         num_masks = len(masks)
-        num_rows = (num_masks + 2) // 2  # 2 images (satellite, map) and masks
+        num_rows = (num_masks + 2 + 1) // 2  # 2 images (satellite, map) and masks
 
         # Plotting
         fig, axs = plt.subplots(num_rows, 2, figsize=(12, 6 * num_rows))
@@ -150,7 +176,7 @@ class SatelliteToMapDataset(Dataset):
         plt.tight_layout()
         plt.show()
 
-    def find_representative_colors(self, n_colors, n_samples_per_image=5000):
+    def find_representative_colors(self):
         # Initialize an empty array for storing sampled pixels
         sample_pixels = np.empty((0, 3), dtype=int)
 
@@ -164,7 +190,7 @@ class SatelliteToMapDataset(Dataset):
             np_img = np.array(img)
 
             # Randomly sample pixels from the image
-            idx = np.random.choice(np_img.shape[0] * np_img.shape[1], n_samples_per_image, replace=False)
+            idx = np.random.choice(np_img.shape[0] * np_img.shape[1], self.n_samples_per_image, replace=False)
             sampled_pixels = np_img.reshape(-1, 3)[idx]
 
             # Append sampled pixels to the array
@@ -172,7 +198,7 @@ class SatelliteToMapDataset(Dataset):
 
         # Apply KMeans to find color centers
         # Explicitly setting n_init to 'auto' to suppress the warning and future-proof the code
-        kmeans = KMeans(n_clusters=n_colors, random_state=0, n_init='auto').fit(sample_pixels)
+        kmeans = KMeans(n_clusters=self.n_colors, random_state=0, n_init='auto').fit(sample_pixels)
         return kmeans.cluster_centers_
     
     def create_masks_from_image(self, image, color_centers):
@@ -194,9 +220,6 @@ class SatelliteToMapDataset(Dataset):
         # Create a figure and a set of subplots
         fig, ax = plt.subplots()
 
-        # Number of colors
-        n_colors = len(color_centers)
-
         # Add a rectangle patch for each color
         for i, color in enumerate(color_centers):
             # Normalize color values to [0, 1] as expected by matplotlib
@@ -205,20 +228,24 @@ class SatelliteToMapDataset(Dataset):
             ax.add_patch(rect)
 
         # Set the limits and aspect of the plot
-        ax.set_xlim(0, n_colors)
+        ax.set_xlim(0, self.n_colors)
         ax.set_ylim(0, 1)
         ax.set_aspect('equal', adjustable='box')
         plt.axis('off')  # Turn off the axis
 
         plt.savefig("models/color_centers.png")
         
-    def get_color_centers(self, n_colors):
+    def get_color_centers(self):
         try:
+            assert self.load == True
             with open("models/segmentation_thresholds.json", "r") as f:
                 color_centers = json.load(f)
-            assert len(color_centers) == n_colors
+            assert len(color_centers) == self.n_colors
         except:
-            color_centers = self.find_representative_colors(n_colors=n_colors)
+            color_centers = self.find_representative_colors()
             self.visualize_color_centers(color_centers)
+            
+            with open("models/segmentation_thresholds.json", "w") as f:
+                json.dump(color_centers.tolist(), f)
             
         return np.array(color_centers)
