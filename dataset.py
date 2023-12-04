@@ -35,15 +35,15 @@ class SatelliteToMapDataset(Dataset):
         img = Image.open(self.file_list[idx])
         w, h = img.size
         
-        img_A, img_B, masks = self.transform_set(img.crop((0, 0, w / 2, h)), img.crop((w / 2, 0, w, h)), random.randint(0, 2**32))
+        img_A, img_B, img_masks = self.transform_set(img.crop((0, 0, w / 2, h)), img.crop((w / 2, 0, w, h)), random.randint(0, 2**32))
         
         if self.plot:
-            self.plot_image_pair(img_A, img_B, masks)
+            self.plot_image_pair(img_A, img_B, img_masks)
 
         if self.output_type == 'map':
             return {'satellite_image': img_A, 'map_image': img_B}
         
-        return {'satellite_image': img_A, 'masks': masks}
+        return {'satellite_image': img_A, 'masks_image': img_masks}
     
     def transform_set(self, img_A, img_B, seed):
         
@@ -66,7 +66,11 @@ class SatelliteToMapDataset(Dataset):
 
             transformed_masks.append(self.transform_mask(mask))
             
-        return img_A, img_B, [self.clean_mask(mask) for mask in transformed_masks]
+        if self.output_type == 'mask':
+            transformed_masks = np.stack([self.clean_mask(mask) for mask in transformed_masks], axis=0)
+            transformed_masks = torch.from_numpy(transformed_masks).float()
+
+        return img_A, img_B, transformed_masks
     
     def clean_mask(self, mask):
         kernel_erode = np.ones((self.erosion_size, self.erosion_size), np.uint8)
