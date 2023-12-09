@@ -3,24 +3,24 @@ import torch
 
 
 class Generator(nn.Module):
-    def __init__(self, input_channels, output_channels, n_residual_blocks=5, output_type='map'):
+    def __init__(self, input_channels, output_channels, n_residual_blocks=9):
         super(Generator, self).__init__()
 
         # Initial convolution block with ReflectionPad
         model = [
             nn.ReflectionPad2d(3),
             nn.Conv2d(input_channels, 64, 7),
-            nn.GroupNorm(64, 64) if output_type == 'map' else nn.InstanceNorm2d(64),
+            nn.GroupNorm(64, 64),
             nn.ReLU(inplace=True)
         ]
 
         # Downsampling
         in_features = 64
-        out_features = in_features * 2
+        out_features = max(128, in_features * 2)
         for _ in range(2):
             model += [
                 nn.Conv2d(in_features, out_features, 3, stride=2, padding=1),
-                nn.GroupNorm(out_features, out_features) if output_type == 'map' else nn.InstanceNorm2d(out_features),
+                nn.GroupNorm(out_features, out_features),
                 nn.ReLU(inplace=True)
             ]
             in_features = out_features
@@ -37,7 +37,7 @@ class Generator(nn.Module):
         for _ in range(2):
             model += [
                 nn.ConvTranspose2d(in_features, out_features, 3, stride=2, padding=1, output_padding=1),
-                nn.GroupNorm(out_features, out_features) if output_type == 'map' else nn.InstanceNorm2d(out_features),
+                nn.GroupNorm(out_features, out_features),
                 nn.ReLU(inplace=True)
             ]
             in_features = out_features
@@ -47,7 +47,7 @@ class Generator(nn.Module):
         model += [
             nn.ReflectionPad2d(3),
             nn.Conv2d(64, output_channels, 7),
-            nn.Tanh() if output_type == 'map' else nn.Sigmoid()
+            nn.Tanh(),
         ]
 
         self.model = nn.Sequential(*model)

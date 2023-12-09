@@ -4,7 +4,7 @@
 current_epoch=0
 num_epochs=$((current_epoch + 2))
 dir_index=$((current_epoch % 4))
-resize=96
+resize=256
 
 # Array of directories
 dirs=("0" "1" "2" "3")
@@ -25,9 +25,9 @@ while [ $current_epoch -lt 2000 ]; do
         let dir_index%=4
     fi
     if [ $((current_epoch % 16)) -eq 0 ]; then
-        let resize+=32
-        if [ $resize -gt 256 ]; then
-            resize=256
+        let resize+=128
+        if [ $resize -gt 420 ]; then
+            resize=420
         fi
     fi
 done

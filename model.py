@@ -16,10 +16,12 @@ from buffer import ImageBuffer
 from torch.nn.functional import conv2d
 from torch.autograd import Variable
 from math import exp
+import matplotlib.colors as mcolors
+import cv2
 
 
 class GAN:
-    def __init__(self, dataset_root_dir, val_dataset_root_dir, batch_size=2, current_epoch=0, num_epochs=1000, lr=0.0001, betas=(0.5, 0.999), resize=256, input_channels=3, output_channels=3):
+    def __init__(self, dataset_root_dir, val_dataset_root_dir, batch_size=1, current_epoch=0, num_epochs=1000, lr=0.0002, betas=(0.5, 0.999), resize=256, input_channels=4, output_channels=4):
         
         if current_epoch > 0:
             with open("models/errors.json") as f:
@@ -29,26 +31,25 @@ class GAN:
             self.best_val_loss = min(self.val_errors.values(), key=lambda x: x['val_loss'])['val_loss']
             self.best_ssim_loss = max(self.val_errors.values(), key=lambda x: x['ssim'])['ssim']
             self.wait = self.val_errors[max(self.val_errors.keys())]['wait']
-            print(f"self.wait: {self.wait}")
         else:
             self.errors = {}
-            self.val_errors = {}    
+            self.val_errors = {}
             self.best_val_loss = np.inf
             self.best_ssim_loss = 0
             self.wait = 0
-            print(f"self.wait: {self.wait}")
             
+        self.output_channels = output_channels
         self.device = Device().device
-        self.val_dataset = SatelliteToMapDataset(root_dir=val_dataset_root_dir, resize=resize)
+        self.val_dataset = SatelliteToMapDataset(root_dir=val_dataset_root_dir, resize=resize, n_samples_per_image=100000, load=True)
         self.val_dataloader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=True, num_workers=1)
-        self.patience = 16  # Number of epochs to wait for improvement before stopping
-        self.dataset = SatelliteToMapDataset(root_dir=dataset_root_dir, resize=resize)
+        self.patience = 16
+        self.dataset = SatelliteToMapDataset(root_dir=dataset_root_dir, resize=resize, n_samples_per_image=100000, load=True)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True, num_workers=1)
-        self.window = self.create_window(11, 3).to(self.device)
-        self.G_A = Generator(input_channels, output_channels).to(self.device)
-        self.G_B = Generator(input_channels, output_channels).to(self.device)
+        self.window = self.create_window(11, self.output_channels).to(self.device)
+        self.G_A = Generator(input_channels, self.output_channels).to(self.device)
+        self.G_B = Generator(self.output_channels, input_channels).to(self.device)
         self.D_A = Discriminator(input_channels).to(self.device)
-        self.D_B = Discriminator(input_channels).to(self.device)
+        self.D_B = Discriminator(self.output_channels).to(self.device)
         self.optimizer_G = optim.Adam(itertools.chain(self.G_A.parameters(), self.G_B.parameters()), lr=lr, betas=betas)
         self.optimizer_D_A = optim.Adam(self.D_A.parameters(), lr=lr, betas=betas)
         self.optimizer_D_B = optim.Adam(self.D_B.parameters(), lr=lr, betas=betas)
@@ -82,48 +83,52 @@ class GAN:
         self.D_B.load_state_dict(torch.load(f'all_models/D_B_epoch_{epoch - 1}.pth'))
         print(f"Loaded models from epoch {epoch}")
 
-    def save_plots(self, real_A, real_B, fake_A, fake_B, epoch, batch_index):
-        # Function to convert tensor to numpy image
+    def save_plots(self, real_A, real_B, fake_A, fake_B, epoch, batch_index, color_format='CMYK'):
+        
+        def cmyk_to_rgb(cmyk_image):
+            c, m, y, k = cmyk_image[:, :, 0], cmyk_image[:, :, 1], cmyk_image[:, :, 2], cmyk_image[:, :, 3]
+            
+            r = 255 * (1 - c) * (k - 1)
+            g = 255 * (1 - m) * (k - 1)
+            b = 255 * (1 - y) * (k - 1)
+            
+            rgb_image = np.dstack((r, g, b)).astype(np.uint8)
+            
+            return rgb_image
+        
         def to_numpy(tensor):
-            # Normalize to [0, 1] and then scale to [0, 255]
             tensor = (tensor - tensor.min()) / (tensor.max() - tensor.min())
             image = tensor.detach().cpu().numpy().transpose(1, 2, 0)
             image = (image * 255).astype(np.uint8)
+            
+            if color_format == 'HSV':
+                image = cv2.cvtColor(image, cv2.COLOR_HSV2RGB)
+            if color_format == 'CMYK':
+                image = cmyk_to_rgb(image)
+            
             return image
+        
 
         fig, axs = plt.subplots(2, 2, figsize=(8, 8))
+        images = [real_A, fake_A, real_B, fake_B]
+        titles = ["Real A", "AI Generated A From B", "Real B", "AI Generated B From A"]
 
-        # Normalize and plot real_A
-        image = to_numpy(real_A)
-        image = (image - image.min()) / (image.max() - image.min())
-        axs[0, 0].imshow(image)
-        axs[0, 0].set_title("Real A")
-        axs[0, 0].axis('off')
-
-        # Normalize and plot fake_A
-        image = to_numpy(fake_A)
-        image = (image - image.min()) / (image.max() - image.min())
-        axs[0, 1].imshow(image)
-        axs[0, 1].set_title("AI Generated A From B")
-        axs[0, 1].axis('off')
-
-        # Normalize and plot real_B
-        image = to_numpy(real_B)
-        image = (image - image.min()) / (image.max() - image.min())
-        axs[1, 0].imshow(image)
-        axs[1, 0].set_title("Real B")
-        axs[1, 0].axis('off')
-
-        # Normalize and plot fake_B
-        image = to_numpy(fake_B)
-        image = (image - image.min()) / (image.max() - image.min())
-        axs[1, 1].imshow(image)
-        axs[1, 1].set_title("AI Generated B From A")
-        axs[1, 1].axis('off')
+        for i in range(2):
+            for j in range(2):
+                image = to_numpy(images[i * 2 + j])
+                if image.shape[2] != 3:
+                    image = image.transpose(2, 0, 1)
+                    for mask in image:
+                        print(mask)
+                else:
+                    image = (image - image.min()) / (image.max() - image.min())
+                    axs[i, j].imshow(image)
+                    axs[i, j].set_title(titles[i * 2 + j])
+                    axs[i, j].axis('off')
 
         plt.tight_layout()
         plt.savefig(f'plots/epoch_{epoch}_batch_{batch_index}.png')
-        plt.savefig(f'progress.png')
+        plt.savefig('progress.png')
         plt.close()
         
     def create_window(self, window_size, channel):
@@ -163,35 +168,31 @@ class GAN:
             return ssim_map.mean(1).mean(1).mean(1)
 
     def validate(self, dataloader):
-        self.G_A.eval()
-        self.G_B.eval()
+        self.G_A.eval()  # Set G_A to evaluation mode
+
         total_loss_G = 0
         total_ssim = 0
 
         for i, batch in enumerate(dataloader):
-            real_A = batch['satellite_image'].to(self.device)
-            real_B = batch['map_image'].to(self.device)
+            real_A = batch['input'].to(self.device)
+            real_B = batch['output'].to(self.device)
 
             with torch.no_grad():
                 fake_B = self.G_A(real_A)
-                ssim_val = self.ssim(fake_B, real_B, window=self.window, window_size=11, channel=3, size_average=True)
+                ssim_val = self.ssim(fake_B, real_B, window=self.window, window_size=11, channel=self.output_channels, size_average=True)
 
-                # Identity loss
-                loss_identity_A = self.identity_loss(self.G_B(real_A), real_A)
-
-                # GAN loss
+                loss_identity_B = self.identity_loss(fake_B, real_B)
                 loss_GAN_A2B = self.adversarial_loss(self.D_B(fake_B), True)  # True for real label
 
-                # Cycle consistency loss
-                reconstructed_A = self.G_B(fake_B)
-                loss_cycle_ABA = self.cycle_consistency_loss(real_A, reconstructed_A)
-
                 # Total generator loss
-                total_loss_G += (loss_GAN_A2B + loss_cycle_ABA + loss_identity_A)
+                total_loss_G += (loss_GAN_A2B + loss_identity_B)
                 total_ssim += ssim_val
 
         avg_loss_G = total_loss_G / len(dataloader)
         avg_ssim = total_ssim / len(dataloader)
+
+        self.G_A.train()  # Switch back to training mode
+
         return float(avg_loss_G), float(avg_ssim)
 
     def train(self):
@@ -206,8 +207,8 @@ class GAN:
                 print(f"Epoch: {epoch}")
                 print(f"    Batch: {i}")
 
-                real_A = batch['satellite_image'].to(self.device)
-                real_B = batch['map_image'].to(self.device)
+                real_A = batch['input'].to(self.device)
+                real_B = batch['output'].to(self.device)
 
                 ######################
                 # Update Generators
@@ -222,8 +223,8 @@ class GAN:
                 self.save_plots(real_A[0], real_B[0], fake_A[0], fake_B[0], epoch, i)
 
                 # Identity loss
-                loss_identity_A = self.identity_loss(self.G_B(real_A), real_A)
-                loss_identity_B = self.identity_loss(self.G_A(real_B), real_B)
+                loss_identity_A = self.identity_loss(self.G_B(real_B), real_A)
+                loss_identity_B = self.identity_loss(self.G_A(real_A), real_B)
 
                 # GAN loss
                 loss_GAN_A2B = self.adversarial_loss(self.D_B(fake_B), True)  # True for real label
@@ -273,8 +274,8 @@ class GAN:
                 total_loss_D_A = (real_loss_D_A + fake_loss_D_A) / 2
                 total_loss_D_B = (real_loss_D_B + fake_loss_D_B) / 2
                 
-                print(f"    Total Discriminator A (Satellite to Map) Loss: {total_loss_D_A}")
-                print(f"    Total Discriminator B (Map to Satellite) Loss: {total_loss_D_B}")
+                print(f"    Total Discriminator A (Input to Output) Loss: {total_loss_D_A}")
+                print(f"    Total Discriminator B (Output to Input) Loss: {total_loss_D_B}")
                 
                 epoch_errors_d_a[i] = float(total_loss_D_A)
                 epoch_errors_d_b[i] = float(total_loss_D_B)
@@ -309,14 +310,12 @@ class GAN:
                 self.best_val_loss = min(val_loss, self.best_val_loss)
                 self.best_ssim_loss = max(ssim_loss, self.best_ssim_loss)
                 self.wait = 0  # reset wait
-                print(f"self.wait: {self.wait}")
                 torch.save(self.G_A.state_dict(), 'models/best_G_A.pth')
                 torch.save(self.G_B.state_dict(), 'models/best_G_B.pth')
                 torch.save(self.D_A.state_dict(), 'models/best_D_A.pth')
                 torch.save(self.D_B.state_dict(), 'models/best_D_B.pth')
             else:
                 self.wait += 1
-                print(f"self.wait: {self.wait}")
                 if self.wait >= self.patience:
                     print("Early stopping triggered")
                     break
